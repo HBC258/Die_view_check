@@ -132,7 +132,7 @@ def process_all_csv_files(folder):
 # ------------------ Main Block ------------------
 if __name__ == "__main__":
     # Folder where the CSV files are located
-    folder_path = r"D:\PL,"  # adjust to your folder location
+    folder_path = r"D:\PL,/PL1"  # adjust to your folder location
     
     results = process_all_csv_files(folder_path)
     
