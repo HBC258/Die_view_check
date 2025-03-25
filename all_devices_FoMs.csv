@@ -1,0 +1,2 @@
+device_id,filename,x,y,SS_min (mV/dec),VTH (V),Hysteresis (mV),Gm_max @1V (uS/um)
+18,IDVG [PL_beforeAnneal _ -2 4 18 0  (18) ; 3_20_2025 4_53_35 PM].csv,-2.0,4.0,196.98745060791828,0.8198543381887249,,8.732

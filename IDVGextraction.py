@@ -214,7 +214,7 @@ def compute_VTH_and_gm(df, vdd):
         return np.nan, np.nan
     gm = np.gradient(ID_norm, VG)
     i_max = np.argmax(gm)
-    gm_max = gm[i_max]
+    gm_max = gm[i_max-1]
     VG_max = VG[i_max]
     ID_max = ID_norm[i_max]
     if gm_max == 0:
@@ -223,22 +223,64 @@ def compute_VTH_and_gm(df, vdd):
     VTH = Vcross - 0.5 * vdd
     return VTH, gm_max
 
-def compute_hysteresis(df, vdd):
+def compute_hysteresis(df, threshold_current=1e-6):
     """
-    For a bi-directional sweep (assumed split evenly), computes hysteresis as the absolute difference 
-    between VTH values from the forward and reverse sweeps.
+    Computes hysteresis for a dual-sweep measurement at VDD = 0.1 V.
     
-    Returns hysteresis (in V) or np.nan if data is insufficient.
+    The function checks if VG exhibits a dual sweep pattern (e.g. forward sweep from -2 to 2, and backward from 2 to -2).
+    It splits the data at the turning point (the maximum VG value) into forward and backward segments.
+    
+    For each segment, it finds the two consecutive points where ID_norm crosses the threshold_current.
+    Linear interpolation is then used to calculate the precise VG value at which ID_norm equals the threshold.
+    
+    The hysteresis is the absolute difference between the interpolated VG values from the forward and backward sweeps.
+    If the dual-sweep condition is not met or the threshold crossing cannot be determined, returns np.nan.
     """
-    n = len(df)
-    if n % 2 != 0 or n < 2:
+    VG = df["VG"].values
+    ID_norm = df["ID_norm"].values
+    n = len(VG)
+    if n < 2:
         return np.nan
-    half = n // 2
-    df_forward = df.iloc[:half].copy()
-    df_reverse = df.iloc[half:].copy()
-    VTH_fwd, _ = compute_VTH_and_gm(df_forward, vdd)
-    VTH_rev, _ = compute_VTH_and_gm(df_reverse, vdd)
-    return abs(VTH_fwd - VTH_rev)
+    # Identify turning point: maximum VG (assumed as the split point)
+    i_max = np.argmax(VG)
+    if i_max == 0 or i_max == n - 1:
+        return np.nan  # not a dual sweep
+    
+    # Split the data into forward (from start to i_max) and backward (from i_max to end) segments.
+    forward_df = df.iloc[:i_max+1].copy()
+    backward_df = df.iloc[i_max:].copy()
+    
+    def interpolate_crossing(VG_arr, ID_arr, threshold):
+        """
+        Returns the interpolated VG value where ID_arr crosses the threshold,
+        by scanning for a pair of consecutive points where the crossing occurs.
+        """
+        for i in range(len(VG_arr) - 1):
+            if ID_arr[i] < threshold and ID_arr[i+1] >= threshold:
+                VG1, VG2 = VG_arr[i], VG_arr[i+1]
+                I1, I2 = ID_arr[i], ID_arr[i+1]
+                if I2 == I1:
+                    return VG1  # avoid division by zero
+                VG_cross = VG1 + (threshold - I1) * (VG2 - VG1) / (I2 - I1)
+                return VG_cross
+        return None
+
+    # For the forward sweep (assumed to be increasing in VG)
+    VG_forward = forward_df["VG"].values
+    ID_forward = forward_df["ID_norm"].values
+    VG_cross_forward = interpolate_crossing(VG_forward, ID_forward, threshold_current)
+    
+    # For the backward sweep, sort by VG in ascending order for interpolation.
+    backward_sorted = backward_df.sort_values(by="VG").reset_index(drop=True)
+    VG_backward = backward_sorted["VG"].values
+    ID_backward = backward_sorted["ID_norm"].values
+    VG_cross_backward = interpolate_crossing(VG_backward, ID_backward, threshold_current)
+    
+    if VG_cross_forward is None or VG_cross_backward is None:
+        return np.nan
+    
+    return abs(VG_cross_backward - VG_cross_forward)
+
 
 def compute_device_FoMs(df, device_width=10):
     """
@@ -261,7 +303,7 @@ def compute_device_FoMs(df, device_width=10):
     FoM1_SS = compute_SS(df_vdd_0_1)
     VTH, gm_max = compute_VTH_and_gm(df_vdd_0_1, 0.1)
     FoM2_VTH = VTH
-    FoM3_hysteresis = compute_hysteresis(df_vdd_0_1, 0.1)
+    FoM3_hysteresis = compute_hysteresis(df_vdd_0_1, threshold_current=1e-4)
     _, gm_max_vdd1 = compute_VTH_and_gm(df_vdd_1, 1.0)
     FoM4_gm_max = gm_max_vdd1
     
