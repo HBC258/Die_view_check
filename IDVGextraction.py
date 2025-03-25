@@ -98,12 +98,7 @@ def process_all_csv_files(folder, header_row=267):
 def is_bad_data(df):
     """
     Returns True if the DataFrame is incomplete or invalid.
-    You can customize the conditions here.
-
-    For example:
-    - Fewer than 10 rows
-    - ID column has too many NaNs
-    - etc.
+    Customize the conditions as needed.
     """
     if len(df) < 10:
         return True  # too few data points
@@ -112,8 +107,6 @@ def is_bad_data(df):
     num_nans = df["ID"].isna().sum()
     if num_nans > 0.8 * len(df):
         return True  # more than 80% are NaN
-
-    # (Optional) Add more conditions if needed
 
     return False
 
@@ -132,12 +125,6 @@ def normalize_current(df, device_width=10):
     return df
 
 def compute_SS(df):
-    """
-    Computes the subthreshold slope (SS) from the ID_norm vs VG curve.
-    Uses finite differences on log10(ID_norm) for ID_norm values above a threshold.
-    Then discards any SS values less than 0.06 V/dec (60 mV/dec) and returns the minimal SS among the remaining values.
-    If no SS values pass the threshold, returns np.nan.
-    """
     threshold = 1e-3  # µA/µm threshold to avoid log(0)
     df_valid = df[df["ID_norm"] > threshold].copy()
     if len(df_valid) < 2:
@@ -153,7 +140,7 @@ def compute_SS(df):
             SS_list.append(dVG / dlogI)
     if not SS_list:
         return np.nan
-    # Filter out SS values less than 0.06 V/dec (60 mV/dec)
+    # Discard SS values < 0.06 V/dec (60 mV/dec)
     valid_ss = [ss for ss in SS_list if ss >= 0.06]
     if valid_ss:
         return min(valid_ss)
@@ -161,27 +148,16 @@ def compute_SS(df):
         return np.nan
 
 def compute_VTH_and_gm(df, vdd):
-    """
-    Computes the threshold voltage (VTH) and maximum transconductance (gm_max)
-    from the ID_norm vs VG curve using linear extrapolation.
-    
-    The method:
-      - Computes gm = d(ID_norm)/d(VG)
-      - Finds the index where gm is maximum
-      - Estimates the intercept (Vcross) from:
-             0 = ID_max + gm_max*(VG_intercept - VG_max)
-             => VG_intercept = VG_max - (ID_max / gm_max)
-      - Defines VTH = VG_intercept - 0.5 * vdd
-      
-    Returns (VTH, gm_max).
-    """
+    if len(df) < 2:
+        return np.nan, np.nan
     VG = df["VG"].values
     ID_norm = df["ID_norm"].values
-    if len(VG) < 2:
-        return np.nan, np.nan
     gm = np.gradient(ID_norm, VG)
     i_max = np.argmax(gm)
-    gm_max = gm[i_max-1]
+    # Slight tweak to ensure we don't go out of bounds
+    if i_max == 0:
+        return np.nan, np.nan
+    gm_max = gm[i_max-1]  # you can revert to gm[i_max] if you prefer
     VG_max = VG[i_max]
     ID_max = ID_norm[i_max]
     if gm_max == 0:
@@ -190,69 +166,45 @@ def compute_VTH_and_gm(df, vdd):
     VTH = Vcross - 0.5 * vdd
     return VTH, gm_max
 
-def compute_hysteresis(df, threshold_current=1e-6):
-    """
-    Computes hysteresis for a dual-sweep measurement at VDD = 0.1 V.
-    
-    The function checks if VG exhibits a dual sweep pattern (e.g. forward sweep from -2 to 2, and backward from 2 to -2).
-    It splits the data at the turning point (the maximum VG value) into forward and backward segments.
-    
-    For each segment, it finds the two consecutive points where ID_norm crosses the threshold_current.
-    Linear interpolation is then used to calculate the precise VG value at which ID_norm equals the threshold.
-    
-    The hysteresis is the absolute difference between the interpolated VG values from the forward and backward sweeps.
-    If the dual-sweep condition is not met or the threshold crossing cannot be determined, returns np.nan.
-    """
+def compute_hysteresis(df, threshold_current=1e-4):
+    if len(df) < 2:
+        return np.nan
     VG = df["VG"].values
     ID_norm = df["ID_norm"].values
     n = len(VG)
     if n < 2:
         return np.nan
-    # Identify turning point: maximum VG (assumed as the split point)
     i_max = np.argmax(VG)
     if i_max == 0 or i_max == n - 1:
-        return np.nan  # not a dual sweep
-    
-    # Split the data into forward (from start to i_max) and backward (from i_max to end) segments.
+        return np.nan
+
     forward_df = df.iloc[:i_max+1].copy()
     backward_df = df.iloc[i_max+1:].copy()
-    
+
     def interpolate_crossing(VG_arr, ID_arr, threshold):
-        """
-        Returns the interpolated VG value where ID_arr crosses the threshold,
-        by scanning for a pair of consecutive points where the crossing occurs.
-        """
         for i in range(len(VG_arr) - 1):
             if ID_arr[i] < threshold and ID_arr[i+1] >= threshold:
                 VG1, VG2 = VG_arr[i], VG_arr[i+1]
                 I1, I2 = ID_arr[i], ID_arr[i+1]
                 if I2 == I1:
-                    return VG1  # avoid division by zero
-                VG_cross = VG1 + (threshold - I1) * (VG2 - VG1) / (I2 - I1)
-                return VG_cross
+                    return VG1
+                return VG1 + (threshold - I1) * (VG2 - VG1) / (I2 - I1)
         return None
 
-    # For the forward sweep (assumed to be increasing in VG)
     VG_forward = forward_df["VG"].values
     ID_forward = forward_df["ID_norm"].values
     VG_cross_forward = interpolate_crossing(VG_forward, ID_forward, threshold_current)
-    
-    # For the backward sweep, sort by VG in ascending order for interpolation.
+
     backward_sorted = backward_df.sort_values(by="VG").reset_index(drop=True)
     VG_backward = backward_sorted["VG"].values
     ID_backward = backward_sorted["ID_norm"].values
     VG_cross_backward = interpolate_crossing(VG_backward, ID_backward, threshold_current)
-    
+
     if VG_cross_forward is None or VG_cross_backward is None:
         return np.nan
-    
     return abs(VG_cross_backward - VG_cross_forward)
 
-
 def compute_device_FoMs(df, device_width=10):
-    """
-    If the data is "bad," return all NaNs. Otherwise, compute FoMs.
-    """
     # 1) Check if data is "bad"
     if is_bad_data(df):
         return {
@@ -291,14 +243,38 @@ if __name__ == "__main__":
     header_row_input = 267
     device_width = 10
 
+    # 1) Gather all CSV data
     results = process_all_csv_files(folder_path, header_row=header_row_input)
 
+    # 2) Build a list of FoM results
+    fom_records = []  # will hold one dict per device
     for entry in results:
         print(f"File: {entry['filename']}")
         print(f"  Device ID: {entry['device_id']}, (x={entry['x']}, y={entry['y']})")
         print(f"  Data shape: {entry['data'].shape}")
+
         FoMs = compute_device_FoMs(entry["data"], device_width)
+
         print("  Figures-of-Merit:")
         for key, value in FoMs.items():
             print(f"    {key}: {value}")
         print()
+
+        # Store the FoMs in a record for later saving
+        record = {
+            "filename": entry["filename"],
+            "device_id": entry["device_id"],
+            "x": entry["x"],
+            "y": entry["y"],
+            "SS_min (V/dec)": FoMs["SS_min (V/dec)"],
+            "VTH (V)": FoMs["VTH (V)"],
+            "Hysteresis (V)": FoMs["Hysteresis (V)"],
+            "Gm_max @1V (µA/µm per V)": FoMs["Gm_max @1V (µA/µm per V)"]
+        }
+        fom_records.append(record)
+
+    # 3) Convert the FoM records to a DataFrame and save to CSV
+    df_fom = pd.DataFrame(fom_records)
+    out_csv = "FoM_summary.csv"  # pick a desired file name
+    df_fom.to_csv(out_csv, index=False)
+    print(f"FoM summary saved to {out_csv}")
