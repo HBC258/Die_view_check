@@ -243,24 +243,17 @@ if __name__ == "__main__":
     header_row_input = 267
     device_width = 10
 
-    # 1) Gather all CSV data
     results = process_all_csv_files(folder_path, header_row=header_row_input)
-
-    # 2) Build a list of FoM results
-    fom_records = []  # will hold one dict per device
+    fom_records = []
     for entry in results:
         print(f"File: {entry['filename']}")
         print(f"  Device ID: {entry['device_id']}, (x={entry['x']}, y={entry['y']})")
         print(f"  Data shape: {entry['data'].shape}")
-
         FoMs = compute_device_FoMs(entry["data"], device_width)
-
         print("  Figures-of-Merit:")
         for key, value in FoMs.items():
             print(f"    {key}: {value}")
         print()
-
-        # Store the FoMs in a record for later saving
         record = {
             "filename": entry["filename"],
             "device_id": entry["device_id"],
@@ -272,9 +265,7 @@ if __name__ == "__main__":
             "Gm_max @1V (µA/µm per V)": FoMs["Gm_max @1V (µA/µm per V)"]
         }
         fom_records.append(record)
-
-    # 3) Convert the FoM records to a DataFrame and save to CSV
     df_fom = pd.DataFrame(fom_records)
-    out_csv = "FoM_summary.csv"  # pick a desired file name
+    out_csv = "FoM_summary.csv"
     df_fom.to_csv(out_csv, index=False)
     print(f"FoM summary saved to {out_csv}")
