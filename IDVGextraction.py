@@ -4,22 +4,13 @@ import glob
 import numpy as np
 import pandas as pd
 
-# =========================
-# File Parsing and Data Read
-# =========================
+# -------------------------
+# 1) Parsing & Data Reading
+# -------------------------
 
 def parse_filename_for_coordinates_and_id(filename):
-    """
-    Given a file path like:
-      "IDVG [PL_beforeAnneal _ 0 0 60 0  (60) ; 3_20_2025 5_18_38 PM].csv"
-    parse out the x-coordinate, y-coordinate, and device id from the substring
-    after the second underscore.
-    
-    Returns:
-      (x, y, device_id) as (float, float, int) if found; otherwise (None, None, None).
-    """
     base = os.path.splitext(os.path.basename(filename))[0]
-    parts = base.split('_', 2)  # split into at most three parts
+    parts = base.split('_', 2)
     if len(parts) < 3:
         return None, None, None
     remainder = parts[2]
@@ -39,32 +30,8 @@ def parse_filename_for_coordinates_and_id(filename):
     return x, y, device_id
 
 def read_data_with_header(filename, header_row=267, na_values=["######", "####", "---"], delimiter=","):
-    """
-    Reads the CSV file using the specified header row (1-based index).
-    
-    Parameters:
-      filename : str
-         Path to the CSV file.
-      header_row : int
-         The row number (1-based) that contains the header.
-         Default is 267.
-      na_values : list
-         List of values to treat as NaN.
-      delimiter : str
-         The CSV delimiter.
-    
-    Returns:
-      DataFrame with columns renamed to ["VG", "VD", "IG", "ID"].
-      Any missing columns among these four are filled with NaN.
-    """
-    # Calculate skiprows: skip header_row-1 rows so that the specified row becomes header.
     skip_rows = header_row - 1
-    desired_signals_map = {
-        "vg": "VG",
-        "vd": "VD",
-        "ig": "IG",
-        "id": "ID"
-    }
+    desired_signals_map = {"vg": "VG", "vd": "VD", "ig": "IG", "id": "ID"}
     df_raw = pd.read_csv(
         filename,
         skiprows=skip_rows,
@@ -72,7 +39,6 @@ def read_data_with_header(filename, header_row=267, na_values=["######", "####",
         delimiter=delimiter,
         na_values=na_values
     )
-    # Rename columns by partial (case-insensitive) matching.
     rename_map = {}
     for col in df_raw.columns:
         col_lower = col.lower()
@@ -83,61 +49,36 @@ def read_data_with_header(filename, header_row=267, na_values=["######", "####",
                 break
         rename_map[col] = matched_name if matched_name else col
     df_raw.rename(columns=rename_map, inplace=True)
-    
-    # Ensure the DataFrame has exactly these columns: VG, VD, IG, ID.
+
     final_order = ["VG", "VD", "IG", "ID"]
     for col in final_order:
         if col not in df_raw.columns:
             df_raw[col] = np.nan
     df_final = df_raw[final_order].copy()
+
+    # Convert columns to numeric to avoid multiplication errors
+    for col in final_order:
+        df_final[col] = pd.to_numeric(df_final[col], errors='coerce')
+
     df_final.dropna(how="all", inplace=True)
     return df_final
 
 def fill_column_with_repeating_sequence(df, column_name, sequence, repeat_count):
-    """
-    If the specified column is missing or entirely NaN, fill it with a repeating sequence.
-    
-    Parameters:
-      df : pandas.DataFrame
-         The DataFrame to modify.
-      column_name : str
-         The name of the column to check and fill.
-      sequence : list
-         The sequence of values to repeat (e.g., [0.1, 1, 1.9, 2.8]).
-      repeat_count : int
-         The number of consecutive rows each sequence value should occupy.
-         
-    Assumes total rows are equal to or greater than len(sequence) * repeat_count.
-    """
     if column_name not in df.columns or df[column_name].isna().all():
         total_rows = len(df)
         fill_values = []
         for value in sequence:
             fill_values.extend([value] * repeat_count)
-        # Extend if needed.
         while len(fill_values) < total_rows:
             fill_values.extend(fill_values)
         df[column_name] = fill_values[:total_rows]
     return df
 
 def process_all_csv_files(folder, header_row=267):
-    """
-    Processes all CSV files in the given folder:
-      - Parses filename for x, y, and device_id.
-      - Reads each file using the specified header row, extracting [VG, VD, IG, ID].
-      - Fills missing columns (e.g. VD) using a repeating sequence.
-    
-    Returns a list of dictionaries sorted by device_id. Each dictionary contains:
-      - "filename": the file name
-      - "x", "y": coordinates (or None)
-      - "device_id": device id (or None)
-      - "data": the DataFrame with columns [VG, VD, IG, ID]
-    """
     all_data = []
     for filepath in glob.glob(os.path.join(folder, "*.csv")):
         x, y, dev_id = parse_filename_for_coordinates_and_id(filepath)
         df = read_data_with_header(filepath, header_row=header_row)
-        # If VD is missing, fill with known VDD sequence ([0.1, 1, 1.9, 2.8]) repeated (e.g., 162 rows each)
         df = fill_column_with_repeating_sequence(df, "VD", [0.1, 1, 1.9, 2.8], 162)
         entry = {
             "filename": os.path.basename(filepath),
@@ -147,19 +88,45 @@ def process_all_csv_files(folder, header_row=267):
             "data": df
         }
         all_data.append(entry)
-    # Sort by device_id (None values at the end)
     all_data.sort(key=lambda d: d["device_id"] if d["device_id"] is not None else float('inf'))
     return all_data
 
-# =========================
-# FoM Calculations
-# =========================
+# -------------------------
+# 2) Checking "Bad" Data
+# -------------------------
+
+def is_bad_data(df):
+    """
+    Returns True if the DataFrame is incomplete or invalid.
+    You can customize the conditions here.
+
+    For example:
+    - Fewer than 10 rows
+    - ID column has too many NaNs
+    - etc.
+    """
+    if len(df) < 10:
+        return True  # too few data points
+
+    # Check how many NaNs are in ID column
+    num_nans = df["ID"].isna().sum()
+    if num_nans > 0.8 * len(df):
+        return True  # more than 80% are NaN
+
+    # (Optional) Add more conditions if needed
+
+    return False
+
+# -------------------------
+# 3) FoM Calculations
+# -------------------------
 
 def normalize_current(df, device_width=10):
-    """
-    Converts ID and IG from A to µA/µm given the device width in µm.
-    """
-    conversion_factor = 1e6 / device_width  # from A to µA, normalized per µm
+    conversion_factor = 1e6 / device_width
+    # Force columns to numeric again, just to be safe
+    df["ID"] = pd.to_numeric(df["ID"], errors='coerce')
+    df["IG"] = pd.to_numeric(df["IG"], errors='coerce')
+
     df["ID_norm"] = df["ID"] * conversion_factor
     df["IG_norm"] = df["IG"] * conversion_factor
     return df
@@ -248,7 +215,7 @@ def compute_hysteresis(df, threshold_current=1e-6):
     
     # Split the data into forward (from start to i_max) and backward (from i_max to end) segments.
     forward_df = df.iloc[:i_max+1].copy()
-    backward_df = df.iloc[i_max:].copy()
+    backward_df = df.iloc[i_max+1:].copy()
     
     def interpolate_crossing(VG_arr, ID_arr, threshold):
         """
@@ -284,29 +251,30 @@ def compute_hysteresis(df, threshold_current=1e-6):
 
 def compute_device_FoMs(df, device_width=10):
     """
-    Given a DataFrame with columns [VG, VD, IG, ID] for one device,
-    this function:
-      - Normalizes currents (ID and IG) from A to µA/µm.
-      - Filters data by VDD (using the filled VD column) for VDD = 0.1 V and 1 V.
-      - Computes:
-          FoM1: Minimum subthreshold slope (SS) from the ID–VG curve at VDD = 0.1 V.
-          FoM2: Threshold voltage (VTH) from linear extrapolation at VDD = 0.1 V.
-          FoM3: Hysteresis (absolute difference in VTH between forward and reverse sweeps) at VDD = 0.1 V.
-          FoM4: Maximum transconductance (Gm_max) at VDD = 1 V.
-    Returns a dictionary of these FoMs.
+    If the data is "bad," return all NaNs. Otherwise, compute FoMs.
     """
+    # 1) Check if data is "bad"
+    if is_bad_data(df):
+        return {
+            "SS_min (V/dec)": np.nan,
+            "VTH (V)": np.nan,
+            "Hysteresis (V)": np.nan,
+            "Gm_max @1V (µA/µm per V)": np.nan
+        }
+
+    # 2) Otherwise proceed as normal
     df = normalize_current(df, device_width)
-    
+
     df_vdd_0_1 = df[df["VD"] == 0.1].copy()
     df_vdd_1 = df[df["VD"] == 1.0].copy()
-    
+
     FoM1_SS = compute_SS(df_vdd_0_1)
     VTH, gm_max = compute_VTH_and_gm(df_vdd_0_1, 0.1)
     FoM2_VTH = VTH
     FoM3_hysteresis = compute_hysteresis(df_vdd_0_1, threshold_current=1e-4)
     _, gm_max_vdd1 = compute_VTH_and_gm(df_vdd_1, 1.0)
     FoM4_gm_max = gm_max_vdd1
-    
+
     return {
         "SS_min (V/dec)": FoM1_SS,
         "VTH (V)": FoM2_VTH,
@@ -314,20 +282,17 @@ def compute_device_FoMs(df, device_width=10):
         "Gm_max @1V (µA/µm per V)": FoM4_gm_max
     }
 
-# =========================
-# Main Processing Block
-# =========================
+# -------------------------
+# 4) Main Processing
+# -------------------------
 
 if __name__ == "__main__":
-    # Set the folder containing your CSV files and the header row (1-based) that contains the titles.
-    folder_path = r"D:\PL,\PL1\Testing"  # adjust as needed
-    header_row_input = 267  # change this if your header is at a different row
-    device_width = 10       # in µm
+    folder_path = r"D:\PL,\PL1"  # adjust as needed
+    header_row_input = 267
+    device_width = 10
 
-    # Process all CSV files into a list of device entries.
     results = process_all_csv_files(folder_path, header_row=header_row_input)
-    
-    # For each device, compute and display Figures-of-Merit.
+
     for entry in results:
         print(f"File: {entry['filename']}")
         print(f"  Device ID: {entry['device_id']}, (x={entry['x']}, y={entry['y']})")
@@ -336,4 +301,4 @@ if __name__ == "__main__":
         print("  Figures-of-Merit:")
         for key, value in FoMs.items():
             print(f"    {key}: {value}")
-        print("\n")
+        print()
