@@ -18,7 +18,6 @@ def parse_filename_for_coordinates_and_id(filename):
     # 1. Strip directory and extension
     base = os.path.splitext(os.path.basename(filename))[0]
     # Example base: "IDVG [PL_beforeAnneal _ 0 0 60 0  (60) ; 3_20_2025 5_18_38 PM]"
-
     # 2. Split by '_' at most twice
     parts = base.split('_', 2)
     if len(parts) < 3:
@@ -94,16 +93,47 @@ def read_data_row_267_reorder(filename, na_values=["######", "####", "---"], del
             df_raw[col] = np.nan
 
     df_final = df_raw[final_order].copy()
-    df_final.dropna(how="all", inplace=True)  # optionally drop rows that are completely NaN
+    df_final.dropna(how="all", inplace=True)  # Optionally drop rows that are entirely NaN
 
     return df_final
+
+def fill_column_with_repeating_sequence(df, column_name, sequence, repeat_count):
+    """
+    If the specified column is missing or all NaN, fill it with a repeating sequence.
+
+    Parameters:
+      df : pandas.DataFrame
+         The DataFrame to modify.
+      column_name : str
+         The name of the column to check and fill.
+      sequence : list
+         The sequence of values to repeat (e.g., [0.1, 1, 1.9, 2.8]).
+      repeat_count : int
+         The number of rows each value in the sequence should occupy.
+         
+    This function assumes that the total number of rows in df is equal to len(sequence) * repeat_count.
+    If not, it will fill as many rows as possible with the provided sequence pattern.
+    """
+    # Check if column is missing or entirely NaN
+    if column_name not in df.columns or df[column_name].isna().all():
+        total_rows = len(df)
+        fill_values = []
+        for value in sequence:
+            fill_values.extend([value] * repeat_count)
+        # If the total number of fill values is less than needed, repeat the sequence
+        while len(fill_values) < total_rows:
+            fill_values.extend(fill_values)
+        # Trim to the exact number of rows
+        df[column_name] = fill_values[:total_rows]
+    return df
 
 def process_all_csv_files(folder):
     """
     1. Finds all CSV files in the folder.
     2. Parses each file name to extract (x, y, device_id).
     3. Reads each file (row 267 as header), extracting columns [VG, VD, IG, ID].
-    4. Returns a list of dictionaries sorted by device_id.
+    4. Optionally fills missing columns (like VD) using a repeating sequence.
+    5. Returns a list of dictionaries sorted by device_id.
     
     Each dictionary has:
       - "filename": file name
@@ -116,6 +146,11 @@ def process_all_csv_files(folder):
     for filepath in glob.glob(os.path.join(folder, "*.csv")):
         x, y, dev_id = parse_filename_for_coordinates_and_id(filepath)
         df = read_data_row_267_reorder(filepath)
+        
+        # Example: If VD is entirely NaN, fill it with the repeating sequence [0.1, 1, 1.9, 2.8],
+        # where each value should repeat for 81 rows.
+        df = fill_column_with_repeating_sequence(df, "VD", [0.1, 1, 1.9, 2.8], 162)
+        
         entry = {
             "filename": os.path.basename(filepath),
             "x": x,
@@ -132,7 +167,7 @@ def process_all_csv_files(folder):
 # ------------------ Main Block ------------------
 if __name__ == "__main__":
     # Folder where the CSV files are located
-    folder_path = r"D:\PL,/PL1"  # adjust to your folder location
+    folder_path = r"D:\PL,\PL1"  # adjust to your folder location
     
     results = process_all_csv_files(folder_path)
     
