@@ -239,7 +239,7 @@ def compute_device_FoMs(df, device_width=10):
 # -------------------------
 
 if __name__ == "__main__":
-    folder_path = r"D:\PL,\PL1"  # adjust as needed
+    folder_path = r"D:\PL,\PL2"  # adjust as needed
     header_row_input = 267
     device_width = 10
 
