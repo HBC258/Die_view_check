@@ -1,5 +1,21 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+wafer_view.py
+
+Interactive wafer view for marking each die as good/bad/decent/optimal,
+then exporting a CSV that maps 'die_id' to 'status'.
+
+Usage:
+1) Run this script.
+2) In the displayed window, click each die to cycle through statuses.
+3) Close the window (or press Ctrl+C in the console) when finished.
+4) Uncomment or call wafer.export_map("device_status.csv") to save the results.
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import csv
 
 class WaferPlotter:
     def __init__(self, rows, cols, fontsize_id=8, fontsize_coord=8, fontsize_status=8):
@@ -48,10 +64,18 @@ class WaferPlotter:
         Compute the die ID for row i, column j in a "snake" pattern:
         - Even rows (0, 2, ...) go left-to-right.
         - Odd rows (1, 3, ...) go right-to-left.
+
+        Example for 9x11 wafer:
+          Row 0: IDs 1..11 (left to right)
+          Row 1: IDs 12..22 (right to left)
+          Row 2: IDs 23..33 (left to right)
+          etc.
         """
         if i % 2 == 0:
+            # Even row: left to right
             return i * self.cols + (j + 1)
         else:
+            # Odd row: right to left
             return i * self.cols + (self.cols - j)
 
     def _init_plot(self):
@@ -60,7 +84,7 @@ class WaferPlotter:
             for j in range(self.cols):
                 status = self.die_status[i][j]
                 color = self.colors.get(status, "blue")
-                # Position: x = column, y = rows - i - 1 (to have row 0 at the top)
+                # Position: x = column, y = rows - i - 1 (so row 0 is at top visually)
                 x = j
                 y = self.rows - i - 1
 
@@ -106,15 +130,12 @@ class WaferPlotter:
     def on_click(self, event):
         """Handle mouse click events to update a die's status."""
         if event.inaxes != self.ax:
-            return  # Click was outside the wafer axes
+            return  # Click was outside wafer axes
 
-        # Ensure we have valid click coordinates
         if event.xdata is None or event.ydata is None:
             return
 
-        # Determine which die was clicked
         col = int(event.xdata)
-        # Convert y coordinate to row index
         row = self.rows - int(event.ydata) - 1
 
         if 0 <= row < self.rows and 0 <= col < self.cols:
@@ -129,8 +150,23 @@ class WaferPlotter:
         else:
             print("Clicked outside of die boundaries.")
 
+    def export_map(self, filename="device_status.csv"):
+        """
+        Export the snake-pattern die ID and its status to a CSV.
+        Columns: die_id, status
+        """
+        with open(filename, mode='w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["die_id", "status"])
+            for i in range(self.rows):
+                for j in range(self.cols):
+                    die_id = self._compute_die_id(i, j)
+                    status = self.die_status[i][j]
+                    writer.writerow([die_id, status])
+        print(f"Status map exported to {filename}")
+
     def show(self, title="Wafer View"):
-        """Optionally block execution until the figure window is closed."""
+        """Block execution until the figure window is closed."""
         self.ax.set_title(title)
         plt.show()
 
@@ -139,3 +175,7 @@ if __name__ == "__main__":
     # Create a wafer with 9 rows and 11 columns
     wafer = WaferPlotter(9, 11, fontsize_id=10, fontsize_coord=9, fontsize_status=10)
     wafer.show("Interactive Wafer View")
+
+    # Once you close the window, you can call:
+    # wafer.export_map("device_status.csv")
+    # to save the status map to a CSV.

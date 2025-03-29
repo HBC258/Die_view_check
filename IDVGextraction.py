@@ -125,7 +125,7 @@ def normalize_current(df, device_width=10):
     return df
 
 def compute_SS(df):
-    threshold = 1e-3  # µA/µm threshold to avoid log(0)
+    threshold = 1e-6  # µA/µm threshold to avoid log(0)
     df_valid = df[df["ID_norm"] > threshold].copy()
     if len(df_valid) < 2:
         return np.nan
@@ -239,7 +239,7 @@ def compute_device_FoMs(df, device_width=10):
 # -------------------------
 
 if __name__ == "__main__":
-    folder_path = r"D:\PL,\PL2"  # adjust as needed
+    folder_path = r"D:\PL,\Annealed\PL1"  # adjust as needed
     header_row_input = 267
     device_width = 10
 
